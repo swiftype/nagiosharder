@@ -1,3 +1,6 @@
+# Load our library
+require 'nagiosharder'
+
 # Enable HTTParty testing
 require 'webmock/rspec'
 

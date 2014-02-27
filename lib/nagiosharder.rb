@@ -1,9 +1,12 @@
+# encoding: UTF-8
+
 require 'restclient'
 require 'nokogiri'
 require 'active_support' # fine, we'll just do all of activesupport instead of the parts I want. thank Rails 3 for shuffling requires around.
 require 'cgi'
 require 'hashie'
 require 'nagiosharder/filters'
+require 'nagiosharder/commands'
 
 # :(
 require 'active_support/version' # double and triplely ensure ActiveSupport::VERSION is around
@@ -25,48 +28,42 @@ class NagiosHarder
     attr_accessor :nagios_url, :user, :password, :default_options, :default_cookies, :version, :nagios_time_format
     include HTTParty::ClassMethods
 
-    def initialize(nagios_url, user, password, version = 3, nagios_time_format = nil)
+    def initialize(nagios_url, user, password, version = 3, nagios_time_format = nil, ssl_verify = true)
       @nagios_url = nagios_url.gsub(/\/$/, '')
       @user = user
       @password = password
-      @default_options = {}
+      @default_options = {:verify => ssl_verify}
       @default_cookies = {}
       @version = version
       debug_output if ENV['DEBUG']
       basic_auth(@user, @password) if @user && @password
-      @nagios_time_format = if nagios_time_format == 'us'
-         "%m-%d-%Y %H:%M:%S"
-      else
-        if @version.to_i < 3
-          "%m-%d-%Y %H:%M:%S"
-        else
-          "%Y-%m-%d %H:%M:%S"
-        end
-      end
+      @nagios_time_format = case nagios_time_format
+                            when 'us'
+                              "%m-%d-%Y %H:%M:%S"
+                            when 'euro'
+                              "%d-%m-%Y %H:%M:%S"
+                            when 'iso8601'
+                              "%Y-%m-%d %H:%M:%S"
+                            else
+                              if @version.to_i == 3 # allows compatability with nagios 4
+                                "%Y-%m-%dT%H:%M:%S"
+                              else
+                                "%m-%d-%Y %H:%M:%S"
+                              end
+                            end
       self
     end
 
-    def acknowledge_service(host, service, comment)
-      request = {
-        :cmd_typ => 34,
-        :cmd_mod => 2,
-        :com_author => @user,
-        :com_data => comment,
-        :host => host,
-        :service => service,
-        :send_notification => true,
-        :persistent => false,
-        :sticky_ack => true
-      }
-
-      response = post(cmd_url, :body => request)
-      response.code == 200 && response.body =~ /successful/
+    def post_command(body)
+      # cmd_mod is always CMDMODE_COMMIT
+      body = {:cmd_mod => 2}.merge(body)
+      response = post(cmd_url, :body => body)
+      response.code == 200 && response.body.match(/successful/) && true
     end
 
     def acknowledge_host(host, comment)
       request = {
-        :cmd_typ => 33,
-        :cmd_mod => 2,
+        :cmd_typ => COMMANDS[:acknowledge_host_problem],
         :com_author => @user,
         :com_data => comment,
         :host => host,
@@ -75,57 +72,48 @@ class NagiosHarder
         :sticky_ack => true
       }
 
-      response = post(cmd_url, :body => request)
-      response.code == 200 && response.body =~ /successful/
+      post_command(request)
     end
 
+    def unacknowledge_host(host)
+      request = {
+        :cmd_typ => COMMANDS[:remove_host_acknowledgement],
+        :host => host
+      }
+
+      post_command(request)
+    end
+    
+    def acknowledge_service(host, service, comment)
+      request = {
+        :cmd_typ => COMMANDS[:acknowledge_service_problem],
+        :com_author => @user,
+        :com_data => comment,
+        :host => host,
+        :service => service,
+        :send_notification => true,
+        :persistent => false,
+        :sticky_ack => true
+      }
+
+      post_command(request)
+    end
+    
     def unacknowledge_service(host, service)
       request = {
-        :cmd_typ => 52,
-        :cmd_mod => 2,
+        :cmd_typ => COMMANDS[:remove_service_acknowledgement],
         :host => host,
         :service => service
       }
 
-      response = post(cmd_url, :body => request)
-      response.code == 200 && response.body =~ /successful/
-    end
-
-    def schedule_service_downtime(host, service, options = {})
-      request = {
-        :cmd_mod => 2,
-        :cmd_typ => 56,
-        :com_author => options[:author] || "#{@user} via nagiosharder",
-        :com_data => options[:comment] || 'scheduled downtime by nagiosharder',
-        :host => host,
-        :service => service,
-        :trigger => 0
-      }
-
-      request[:fixed] = case options[:type].to_sym
-                        when :fixed then 1
-                        when :flexible then 0
-                        else 1
-                        end
-
-
-     if request[:fixed] == 0
-        request[:hours]   = options[:hours]
-        request[:minutes] = options[:minutes]
-      end
-
-      request[:start_time] = formatted_time_for(options[:start_time])
-      request[:end_time]   = formatted_time_for(options[:end_time])
-
-      response = post(cmd_url, :body => request)
-
-      response.code == 200 && response.body =~ /successful/
+      post_command(request)
     end
 
     def schedule_host_downtime(host, options = {})
+      options[:type] ||= :fixed
+      
       request = {
-        :cmd_mod => 2,
-        :cmd_typ => 55,
+        :cmd_typ => COMMANDS[:schedule_host_downtime],
         :com_author => options[:author] || "#{@user} via nagiosharder",
         :com_data => options[:comment] || 'scheduled downtime by nagiosharder',
         :host => host,
@@ -146,48 +134,86 @@ class NagiosHarder
         request[:minutes] = options[:minutes]
       end
 
-      request[:start_time] = formatted_time_for(options[:start_time])
-      request[:end_time]   = formatted_time_for(options[:end_time])
+      request[:start_time] = formatted_time_for(options[:start_time] || Time.now)
+      request[:end_time]   = formatted_time_for(options[:end_time]   || Time.now + 1.hour)
 
-      response = post(cmd_url, :body => request)
+      post_command(request)
+    end
+    
+    def schedule_service_downtime(host, service, options = {})
+      options[:type] ||= :fixed
 
-      response.code == 200 && response.body =~ /successful/
+      request = {
+        :cmd_typ => COMMANDS[:schedule_service_downtime],
+        :com_author => options[:author] || "#{@user} via nagiosharder",
+        :com_data => options[:comment] || 'scheduled downtime by nagiosharder',
+        :host => host,
+        :service => service,
+        :trigger => 0
+      }
+
+      request[:fixed] = case options[:type].to_sym
+                        when :fixed then 1
+                        when :flexible then 0
+                        else 1
+                        end
+
+
+     if request[:fixed] == 0
+        request[:hours]   = options[:hours]
+        request[:minutes] = options[:minutes]
+      end
+
+      request[:start_time] = formatted_time_for(options[:start_time] || Time.now)
+      request[:end_time]   = formatted_time_for(options[:end_time]   || Time.now + 1.hour)
+
+      post_command(request)
     end
 
     def cancel_downtime(downtime_id, downtime_type = :host_downtime)
-      downtime_types = {
-        :host_downtime => 78,
-        :service_downtime => 79
+      request = {
+        :cmd_typ => COMMANDS["del_#{downtime_type}".to_sym],
+        :down_id => downtime_id
       }
-      response = post(cmd_url, :body => {
-                                        :cmd_typ => downtime_types[downtime_type],
-                                        :cmd_mod => 2,
-                                        :down_id => downtime_id
-                                        })
-      response.code == 200 && response.body =~ /successful/
+      
+      post_command(request)
     end
 
     def schedule_host_check(host)
-      response = post(cmd_url, :body => {
-                                          :start_time => formatted_time_for(Time.now),
-                                          :host => host,
-                                          :force_check => true,
-                                          :cmd_typ => 96,
-                                          :cmd_mod => 2
-                                        })
-      response.code == 200 && response.body =~ /successful/
+      request = {
+        :start_time => formatted_time_for(Time.now),
+        :host => host,
+        :force_check => true,
+        :cmd_typ => COMMANDS[:schedule_host_check],
+      }
+      
+      post_command(request)
     end
 
     def schedule_service_check(host, service)
-      response = post(cmd_url, :body => {
-                                          :start_time => formatted_time_for(Time.now),
-                                          :host => host,
-                                          :service => service,
-                                          :force_check => true,
-                                          :cmd_typ => 7,
-                                          :cmd_mod => 2
-                                        })
-      response.code == 200 && response.body =~ /successful/
+      request = {
+        :start_time => formatted_time_for(Time.now),
+        :host => host,
+        :service => service,
+        :force_check => true,
+        :cmd_typ => COMMANDS[:schedule_service_check],
+      }
+      
+      post_command(request)
+    end
+    
+    def host_status(host)
+      host_status_url = "#{status_url}?host=#{host}&embedded=1&noheader=1&limit=0"
+      response = get(host_status_url)
+
+      raise "wtf #{host_status_url}? #{response.code}" unless response.code == 200
+
+      services = {}
+      parse_status_html(response) do |status|
+        services[status[:service]] = status
+      end
+
+      services
     end
 
     def service_status(options = {})
@@ -215,7 +241,7 @@ class NagiosHarder
         :hostprops,
         :serviceprops,
       ).each do |key|
-        params[key.to_s] = options[:val] if !options[:val].nil? && options[:val].match(/^\d*$/)
+        params[key.to_s] = options[:val] if options[:val] && options[:val].match(/^\d*$/)
       end
 
       if @version == 3
@@ -247,8 +273,8 @@ class NagiosHarder
       statuses
     end
 
-    def hostgroups_summary(options = {})
-      hostgroups_summary_url = "#{status_url}?hostgroup=all&style=summary"
+    def hostgroups_summary(hostgroup = "all")
+      hostgroups_summary_url = "#{status_url}?hostgroup=#{hostgroup}&style=summary"
       response = get(hostgroups_summary_url)
 
       raise "wtf #{hostgroups_summary_url}? #{response.code}" unless response.code == 200
@@ -261,8 +287,8 @@ class NagiosHarder
      hostgroups
     end
 
-    def servicegroups_summary(options = {})
-      servicegroups_summary_url = "#{status_url}?servicegroup=all&style=summary"
+    def servicegroups_summary(servicegroup = "all")
+      servicegroups_summary_url = "#{status_url}?servicegroup=#{servicegroup}&style=summary"
       response = get(servicegroups_summary_url)
 
       raise "wtf #{servicegroups_summary_url}? #{response.code}" unless response.code == 200
@@ -274,77 +300,97 @@ class NagiosHarder
 
       servicegroups
     end
-
-    def host_status(host)
-      host_status_url = "#{status_url}?host=#{host}&embedded=1&noheader=1&limit=0"
-      response =  get(host_status_url)
-
-      raise "wtf #{host_status_url}? #{response.code}" unless response.code == 200
-
-      services = {}
-      parse_status_html(response) do |status|
-        services[status[:service]] = status
+    
+    def hostgroups_detail(hostgroup = "all")
+      hostgroups_detail_url = "#{status_url}?hostgroup=#{hostgroup}&style=hostdetail&embedded=1&noheader=1&limit=0"
+      response = get(hostgroups_detail_url)
+      
+      raise "wtf #{hostgroups_detail_url}? #{response.code}" unless response.code == 200
+      
+      hosts = {}
+      parse_detail_html(response) do |status|
+        hosts[status[:host]] = status
       end
-
-      services
+      
+      hosts
     end
 
     def disable_service_notifications(host, service, options = {})
       request = {
-        :cmd_mod => 2,
         :host => host
       }
 
       if service
-        request[:cmd_typ] = 23
+        request[:cmd_typ] = COMMANDS[:disable_service_notifications]
         request[:service] = service
       else
-        request[:cmd_typ] = 29
+        request[:cmd_typ] = COMMANDS[:disable_host_service_checks]
         request[:ahas] = true
       end
 
-      response = post(cmd_url, :body => request)
-      if response.code == 200 && response.body =~ /successful/
-        # TODO enable waiting. seems to hang intermittently
-        #if options[:wait]
-        #  sleep(3) until service_notifications_disabled?(host, service)
-        #end
-        true
-      else
-        false
-      end
+      # TODO add option to block until the service shows as disabled
+      post_command(request)
     end
 
     def enable_service_notifications(host, service, options = {})
       request = {
-        :cmd_mod => 2,
         :host => host
       }
 
       if service
-        request[:cmd_typ] = 22
+        request[:cmd_typ] = COMMANDS[:enable_service_notifications]
         request[:service] = service
       else
-        request[:cmd_typ] = 28
+        request[:cmd_typ] = COMMANDS[:enable_host_service_notifications]
         request[:ahas] = true
       end
 
-      response = post(cmd_url, :body => request)
-      if response.code == 200 && response.body =~ /successful/
-        # TODO enable waiting. seems to hang intermittently
-        #if options[:wait]
-        #  sleep(3) while service_notifications_disabled?(host, service)
-        #end
-        true
-      else
-        false
-      end
+      # TODO add option to block until the service shows as disabled
+      post_command(request)
     end
 
     def service_notifications_disabled?(host, service)
       self.host_status(host)[service].notifications_disabled
     end
+    
+    def alert_history(options = {})
+      params = {}
+    
+      {
+        :state_type => :history_state,
+        :type => :history
+      }.each do |key, val|
+        if options[key] && (options[key].is_a?(Array) || options[key].is_a?(Symbol))
+          params[key.to_s.gsub(/_/, '')] = Nagiosharder::Filters.value(val, *options[key])
+        end
+      end
+      
+      # if any of the standard filter params are already integers, those win
+      %w(
+        :statetype,
+        :type
+      ).each do |key|
+        params[key.to_s] = options[:val] if !options[:val].nil? && options[:val].match(/^\d*$/)
+      end
+      
+      params['host'] = options[:host] || 'all'
+      params['archive'] = options[:archive] || '0'
+      
+      query = params.select {|k,v| v }.map {|k,v| "#{k}=#{v}" }.join('&')
+      
+      alert_history_url = "#{history_url}?#{query}"
+      puts alert_history_url
+      response = get(alert_history_url)
 
+      raise "wtf #{alert_history_url}? #{response.code}" unless response.code == 200
+
+      alerts = []
+      parse_history_html(response) do |alert|
+        alerts << alert
+      end
+
+      alerts
+    end
 
     def status_url
       "#{nagios_url}/status.cgi"
@@ -356,6 +402,10 @@ class NagiosHarder
 
     def extinfo_url
       "#{nagios_url}/extinfo.cgi"
+    end
+    
+    def history_url
+      "#{nagios_url}/history.cgi"
     end
 
     private
@@ -376,7 +426,7 @@ class NagiosHarder
           group = columns[0].inner_text.gsub(/\n/, '').match(/\((.*?)\)/)[1]
         end
 
-        if !group.nil?
+        if group
           host_status_url, host_status_counts = parse_host_status_summary(columns[1]) if columns[1]
           service_status_url, service_status_counts = parse_service_status_summary(columns[2]) if columns[2]
 
@@ -409,6 +459,61 @@ class NagiosHarder
       counts['critical'] = column.inner_text.match(/(\d+)\s(CRITICAL)/)[1] rescue 0
       counts['unknown'] = column.inner_text.match(/(\d+)\s(UNKNOWN)/)[1] rescue 0
       return link, counts
+    end
+    
+    def parse_detail_html(response)
+      doc = Nokogiri::HTML(response.to_s)
+      rows = doc.css('table.status > tr')
+      
+      rows.each do |row|
+        columns = Nokogiri::HTML(row.inner_html).css('body > td').to_a
+        if columns.any?
+
+          # Host column
+          host = columns[0].css('a').text.strip
+          
+          # Status
+          status = columns[1].inner_html  if columns[1]
+          
+          # Last Check
+          last_check = if columns[2] && columns[2].inner_html != 'N/A'
+                         last_check_str = columns[2].inner_html
+                         debug "Need to parse #{columns[2].inner_html} in #{nagios_time_format}"
+                         DateTime.strptime(columns[2].inner_html, nagios_time_format).to_s
+                       end
+          debug 'parsed last check column'
+
+          # Duration
+          duration = columns[3].inner_html.squeeze(' ').gsub(/^ /, '') if columns[3]
+          started_at = if duration && match_data = duration.match(/^\s*(\d+)d\s+(\d+)h\s+(\d+)m\s+(\d+)s\s*$/)
+                         (
+                           match_data[1].to_i.days +
+                           match_data[2].to_i.hours +
+                           match_data[3].to_i.minutes +
+                           match_data[4].to_i.seconds
+                         ).ago
+                       end
+          debug 'parsed duration column'
+
+          # Status info
+          status_info = columns[4].inner_html.gsub('&nbsp;', '').gsub("\302\240", '').gsub("&#160;", '') if columns[4]
+          debug 'parsed status info column'
+          
+          if host && status && last_check && duration && started_at && status_info
+            host_extinfo_url = "#{extinfo_url}?type=1&host=#{host}"
+            
+            status = Hashie::Mash.new :host => host,
+              :status => status,
+              :last_check => last_check,
+              :duration => duration,
+              :started_at => started_at,
+              :extended_info => status_info,
+              :host_extinfo_url => host_extinfo_url
+
+            yield status
+          end
+        end
+      end
     end
 
     def parse_status_html(response)
@@ -531,6 +636,44 @@ class NagiosHarder
       end
 
       nil
+    end
+    
+    def parse_history_html(response)
+      doc = Nokogiri::HTML(response.to_s)
+      alerts = doc.css('div.logEntries img')
+      
+      if alerts.any?
+        alerts.each do |row|
+          text = row.next.text.gsub('  ',';').split(/;|: /) unless row.next.text.nil?
+          # differentiate host vs service alert output in nagios.log
+          case
+            when text.length >= 8 # service alert
+              last_check, alert_type, host, service, status, state, attempt, *extended_info = row.next.text.gsub('  ',';').split(/;|: /)
+            when text.length == 7 # host alert
+              last_check, alert_type, host, status, state, attempt, *extended_info = row.next.text.gsub('  ',';').split(/;|: /)
+            when text.length == 6 # service flapping alert
+              last_check, alert_type, host, service, status, state, *extended_info = row.next.text.gsub('  ',';').split(/;|: /)
+            when text.length == 5 # scheduled host downtime
+              last_check, alert_type, host, status, *extended_info = row.next.text.gsub('  ',';').split(/;|: /)
+          end
+          
+          service_extinfo_url = service ? "#{extinfo_url}?type=2&host=#{host}&service=#{CGI.escape(service)}" : nil
+          host_extinfo_url = "#{extinfo_url}?type=1&host=#{host}"
+          
+          alert = Hashie::Mash.new :last_check => last_check.gsub('[','').gsub(']',''),
+            :alert_type => alert_type,
+            :host => host,
+            :service => service,
+            :status => status,
+            :state => state,
+            :attempt => attempt,
+            :extended_info => extended_info.nil? ? extended_info : extended_info.join(': ').strip,
+            :host_extinfo_url => host_extinfo_url,
+            :service_extinfo_url => service_extinfo_url
+          
+          yield alert
+        end
+      end
     end
 
     def debug(*args)
