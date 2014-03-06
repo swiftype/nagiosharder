@@ -83,7 +83,14 @@ class NagiosHarder
 
       post_command(request)
     end
-    
+   
+    def disable_notifications
+      request = {
+        :cmd_typ => COMMANDS[:disable_notifications]
+      }
+      post_command(request)
+    end
+
     def acknowledge_service(host, service, comment)
       request = {
         :cmd_typ => COMMANDS[:acknowledge_service_problem],
