@@ -105,7 +105,6 @@ class NagiosHarder
       else
         return false
       end
-    end
 
     def acknowledge_service(host, service, comment)
       request = {
@@ -696,7 +695,7 @@ class NagiosHarder
           
           yield alert
         end
-      end§
+      end
     end
 
     def debug(*args)
