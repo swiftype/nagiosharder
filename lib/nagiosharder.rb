@@ -690,6 +690,15 @@ class NagiosHarder
       end
     end
 
+    def notifications_enabled?(response)
+      doc = Nokogiri::HTML(response.to_s)
+      if doc.at_css(".notificationsENABLED").children.text[/YES/]
+        return true
+      else
+        return false
+      end
+    end
+
     def debug(*args)
       $stderr.puts *args if ENV['DEBUG']
     end
