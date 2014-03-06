@@ -91,6 +91,13 @@ class NagiosHarder
       post_command(request)
     end
 
+    def enable_notifications
+      request = {
+        :cmd_typ => COMMANDS[:enable_notifications]
+      }
+      post_command(request)
+    end
+
     def acknowledge_service(host, service, comment)
       request = {
         :cmd_typ => COMMANDS[:acknowledge_service_problem],
