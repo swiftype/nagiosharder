@@ -98,7 +98,8 @@ class NagiosHarder
       post_command(request)
     end
 
-    def notifications_enabled?(response)
+    def notifications_enabled?
+      response = get(extinfo_url)
       doc = Nokogiri::HTML(response.to_s)
       if doc.at_css(".notificationsENABLED").children.text[/YES/]
         return true
