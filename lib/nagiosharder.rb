@@ -105,6 +105,7 @@ class NagiosHarder
       else
         return false
       end
+    end
 
     def acknowledge_service(host, service, comment)
       request = {
