@@ -98,6 +98,15 @@ class NagiosHarder
       post_command(request)
     end
 
+    def notifications_enabled?(response)
+      doc = Nokogiri::HTML(response.to_s)
+      if doc.at_css(".notificationsENABLED").children.text[/YES/]
+        return true
+      else
+        return false
+      end
+    end
+
     def acknowledge_service(host, service, comment)
       request = {
         :cmd_typ => COMMANDS[:acknowledge_service_problem],
@@ -687,16 +696,7 @@ class NagiosHarder
           
           yield alert
         end
-      end
-    end
-
-    def notifications_enabled?(response)
-      doc = Nokogiri::HTML(response.to_s)
-      if doc.at_css(".notificationsENABLED").children.text[/YES/]
-        return true
-      else
-        return false
-      end
+      end§
     end
 
     def debug(*args)
