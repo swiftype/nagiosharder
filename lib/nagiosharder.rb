@@ -98,7 +98,7 @@ class NagiosHarder
       post_command(request)
     end
 
-    def notifications_status(format) # :text and :json is accepted
+    def notifications_status
       response = get(extinfo_url)
       doc = Nokogiri::HTML(response.to_s)
       if doc.at_css(".notificationsENABLED")
