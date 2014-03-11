@@ -89,6 +89,7 @@ class NagiosHarder
         :cmd_typ => COMMANDS[:disable_notifications]
       }
       post_command(request)
+      return { "result" => "disabled" }
     end
 
     def enable_notifications
@@ -96,6 +97,7 @@ class NagiosHarder
         :cmd_typ => COMMANDS[:enable_notifications]
       }
       post_command(request)
+      return { "result" => "enabled" }
     end
 
     def notifications_status
