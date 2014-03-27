@@ -107,7 +107,22 @@ class NagiosHarder
         return { "enabled" => true }
       elsif doc.at_css(".notificationsDISABLED")
         return { "enabled" => false }
+      else
+        return { "enabled" => "unknown" }
       end
+    end
+
+    def all_servers
+      response = get(status_url + '?hostgroup=all&style=hostdetail')
+      doc = Nokogiri::HTML(response.to_s)
+
+      nodeset_up = doc.css('.statusHOSTUP .statusHOSTUP a')
+      hosts_up = nodeset_up.to_a.map(&:text).uniq
+
+      nodeset_down = doc.css('.statusHOSTDOWN .statusHOSTDOWN a')
+      hosts_down = nodeset_down.to_a.map(&:text).uniq
+
+      return { 'hosts' => hosts_up + hosts_down }
     end
 
     def acknowledge_service(host, service, comment)
