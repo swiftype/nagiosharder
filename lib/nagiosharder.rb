@@ -356,6 +356,32 @@ class NagiosHarder
       hosts
     end
 
+    def disable_host_notifications(host, options = {})
+      request = {
+        :host => host,
+        :cmd_typ => COMMANDS[:disable_host_notifications]
+      }
+
+      if post_command(request)
+        return { "result" => "disabled", "hosts" => host }
+      else
+        return { "result" => "error" }
+      end
+    end
+
+    def enable_host_notifications(host, options = {})
+      request = {
+        :host => host,
+        :cmd_typ => COMMANDS[:enable_host_notifications]
+      }
+
+      if post_command(request)
+        return { "result" => "enabled", "hosts" => host }
+      else
+        return { "result" => "error" }
+      end
+    end
+
     def disable_service_notifications(host, service, options = {})
       request = {
         :host => host
