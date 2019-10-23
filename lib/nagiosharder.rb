@@ -83,7 +83,63 @@ class NagiosHarder
 
       post_command(request)
     end
-    
+   
+    def disable_notifications
+      request = {
+        :cmd_typ => COMMANDS[:disable_notifications]
+      }
+      post_command(request)
+      return { "result" => "disabled" }
+    end
+
+    def enable_notifications
+      request = {
+        :cmd_typ => COMMANDS[:enable_notifications]
+      }
+      post_command(request)
+      return { "result" => "enabled" }
+    end
+
+    def global_notifications_status
+      response = get(extinfo_url)
+      doc = Nokogiri::HTML(response.to_s)
+      if doc.at_css(".notificationsENABLED")
+        return { "enabled" => true }
+      elsif doc.at_css(".notificationsDISABLED")
+        return { "enabled" => false }
+      else
+        return { "enabled" => "unknown" }
+      end
+    end
+
+    def hosts_which_notifications_disabled
+      response = get(status_url + '?hostgroup=all&style=hostdetail')
+      response.scan(/.*ndisabled\.gif.*/).collect { |i| i.scan(/(?<=host\=)[^']*/)[0] }
+    end
+
+    def host_notifications_disabled(host)
+      response = get(extinfo_url + "?type=1&host=#{host}")
+      doc = Nokogiri::HTML(response.to_s)
+      if doc.at_css(".notificationsENABLED")
+        return true
+      elsif doc.at_css(".notificationsDISABLED")
+        return false
+      end
+    end
+
+    def all_servers
+      response = get(status_url + '?hostgroup=all&style=hostdetail&limit=0')
+      doc = Nokogiri::HTML(response.to_s)
+
+      nodeset_up = doc.css('.statusHOSTUP .statusHOSTUP a')
+      hosts_up = nodeset_up.to_a.map(&:text).uniq
+
+      nodeset_down = doc.css('.statusHOSTDOWN .statusHOSTDOWN a')
+      hosts_down = nodeset_down.to_a.map(&:text).uniq
+
+      return { 'hosts' => hosts_up + hosts_down }
+    end
+
     def acknowledge_service(host, service, comment)
       request = {
         :cmd_typ => COMMANDS[:acknowledge_service_problem],
@@ -313,6 +369,42 @@ class NagiosHarder
       end
       
       hosts
+    end
+
+    def disable_host_notifications(host, options = {})
+      disable_notifications = {
+        :host => host,
+        :cmd_typ => COMMANDS[:disable_host_notifications]
+      }
+
+      disable_service_notifications = {
+        :host => host,
+        :cmd_typ => COMMANDS[:disable_host_service_notifications]
+      }
+
+      if post_command(disable_notifications) and post_command(disable_service_notifications)
+        return { "result" => "disabled", "hosts" => host }
+      else
+        return { "result" => "error" }
+      end
+    end
+
+    def enable_host_notifications(host, options = {})
+      enable_notifications = {
+        :host => host,
+        :cmd_typ => COMMANDS[:enable_host_notifications]
+      }
+
+      enable_service_notifications = {
+        :host => host,
+        :cmd_typ => COMMANDS[:enable_host_service_notifications]
+      }
+
+      if post_command(enable_notifications) and post_command(enable_service_notifications)
+        return { "result" => "enabled", "hosts" => host }
+      else
+        return { "result" => "error" }
+      end
     end
 
     def disable_service_notifications(host, service, options = {})

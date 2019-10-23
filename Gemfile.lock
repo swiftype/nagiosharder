@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    nagiosharder (0.5.0.swiftype02)
+    nagiosharder (0.5.0.swiftype03)
       activesupport
       hashie (~> 1.2.0)
       httparty
