@@ -113,7 +113,7 @@ class NagiosHarder
     end
 
     def hosts_which_notifications_disabled
-      response = get(status_url + '?hostgroup=all&style=hostdetail')
+      response = get(status_url + '?hostgroup=all&style=hostdetail&limit=0')
       response.scan(/.*ndisabled\.gif.*/).collect { |i| i.scan(/(?<=host\=)[^']*/)[0] }
     end
 
